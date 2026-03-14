@@ -1,0 +1,38 @@
+# Environnement virtuel
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Données brutes (trop lourdes pour Git)
+data/raw/
+data/processed/
+
+# Modèles entraînés
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
