@@ -3,4 +3,4 @@ spacy
 scikit-learn
 pandas
 ipykernel
-datasets
+datasets==2.18.0
