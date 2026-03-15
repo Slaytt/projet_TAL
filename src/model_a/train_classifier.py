@@ -9,21 +9,22 @@
 #   4. Évalue le modèle sur un jeu de test
 #   5. Sauvegarde le modèle entraîné pour une utilisation future
 
+import os
+import sys
+
 import joblib
 from datasets import load_dataset
-from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.svm import LinearSVC
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
-import sys
-import os
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.svm import LinearSVC
 
 # On ajoute le dossier racine du projet au chemin Python pour pouvoir
 # importer notre module de prétraitement (src/preprocessing/clean_text.py)
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.preprocessing.clean_text import preparer_dataset_swda
-
 
 # =============================================================================
 # ÉTAPE 1 : CHARGEMENT ET PRÉTRAITEMENT DES DONNÉES
@@ -43,6 +44,9 @@ dataset = load_dataset("swda", trust_remote_code=True)
 #   - Nettoyage du texte avec spaCy (lemmatisation, stop words)
 # Résultat : DataFrame avec colonnes 'texte_nettoye' et 'macro_classe'
 df = preparer_dataset_swda(dataset)
+df["contient_point_interrogation"] = df["text"].apply(
+    lambda x: 1 if "?" in str(x) else 0
+)
 
 
 # =============================================================================
@@ -55,7 +59,7 @@ print("=" * 60)
 
 # X contient les textes (les features, ce qu'on donne au modèle)
 # y contient les labels (ce que le modèle doit prédire)
-X = df["texte_nettoye"]
+X = df[["texte_nettoye", "contient_point_interrogation"]]
 y = df["macro_classe"]
 
 # train_test_split divise le dataset aléatoirement :
@@ -82,43 +86,29 @@ print("=" * 60)
 
 # Un Pipeline scikit-learn enchaîne des étapes de transformation + modèle.
 # Avantage : on peut entraîner et prédire en une seule commande.
-pipeline = Pipeline([
 
-    # --- Étape A : Vectorisation TF-IDF ---
-    # TfidfVectorizer transforme chaque réplique en vecteur numérique.
-    #
-    # ngram_range=(1, 2) : on prend les mots seuls (unigrammes) ET
-    #   les paires de mots consécutifs (bigrammes).
-    #   Ex: "give order" → features: "give", "order", "give order"
-    #   Les bigrammes capturent des expressions utiles comme "please sit"
-    #
-    # max_features=50000 : on ne garde que les 50 000 features les plus fréquentes
-    #   (limite la taille du vecteur pour des raisons de performance)
-    #
-    # sublinear_tf=True : applique un log sur les fréquences TF
-    #   (atténue l'effet des mots très répétés dans une même réplique)
-    ('tfidf', TfidfVectorizer(
-        ngram_range=(1, 2),
-        max_features=50000,
-        sublinear_tf=True
-    )),
+preprocessor = ColumnTransformer(
+    transformers=[
+        # 1. On applique le TF-IDF uniquement sur la colonne 'texte_nettoye'
+        (
+            "tfidf",
+            TfidfVectorizer(ngram_range=(1, 2), max_features=50000, sublinear_tf=True),
+            "texte_nettoye",
+        ),
+        # 2. On laisse passer la colonne 'contient_point_interrogation' telle quelle (sans la modifier)
+        ("features_supp", "passthrough", ["contient_point_interrogation"]),
+    ]
+)
 
-    # --- Étape B : Classifieur LinearSVC ---
-    # LinearSVC est un SVM (Support Vector Machine) linéaire.
-    # C'est l'un des meilleurs algorithmes pour la classification de texte.
-    #
-    # class_weight='balanced' : ajuste automatiquement le poids de chaque classe
-    #   proportionnellement à l'inverse de sa fréquence.
-    #   → La classe PLAINTE (83 ex.) aura un poids ~2100x plus élevé que
-    #     STATEMENT (82000 ex.) pour compenser le déséquilibre.
-    #
-    # max_iter=2000 : nombre maximum d'itérations pour la convergence
-    #   (on augmente à 2000 pour s'assurer que l'optimisation converge)
-    ('clf', LinearSVC(
-        class_weight='balanced',
-        max_iter=5000  # augmenté à 5000 pour garantir la convergence
-    )),
-])
+pipeline = Pipeline(
+    [
+        (
+            "preprocessor",
+            preprocessor,
+        ),  # Le préprocesseur qui combine le TF-IDF et la feature "?"
+        ("clf", LinearSVC(class_weight="balanced", max_iter=5000)),
+    ]
+)
 
 print("Pipeline créé : TfidfVectorizer(ngrams 1-2, 50k features) → LinearSVC(balanced)")
 

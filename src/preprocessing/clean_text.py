@@ -8,8 +8,10 @@
 #                                et regroupe les 43 labels en 11 macro-classes
 
 import re
+
 import pandas as pd
 import spacy
+from tqdm import tqdm
 
 # =============================================================================
 # DICTIONNAIRE DE MAPPING : 43 labels SWDA → 11 macro-classes
@@ -23,79 +25,70 @@ import spacy
 
 LABEL_TO_MACROCLASSE = {
     # --- STATEMENT : déclarations factuelles + continuations ---
-    'sd': 'STATEMENT',  # statement-non-opinion : déclaration factuelle
-    '+': 'STATEMENT',   # continuation : suite de la réplique précédente
-
+    "sd": "STATEMENT",  # statement-non-opinion : déclaration factuelle
+    "+": "STATEMENT",  # continuation : suite de la réplique précédente
     # --- OPINION : affirmations subjectives ---
-    'sv': 'OPINION',    # statement-opinion : point de vue personnel
-    'bf': 'OPINION',    # belief : croyance, bilan personnel
-
+    "sv": "OPINION",  # statement-opinion : point de vue personnel
+    "bf": "OPINION",  # belief : croyance, bilan personnel
     # --- QUESTION : toutes les formes de questions ---
-    'qy': 'QUESTION',   # yes-no question : question fermée oui/non
-    'qw': 'QUESTION',   # wh-question : question ouverte (who, what, where...)
-    'qh': 'QUESTION',   # rhetorical question : question rhétorique
-    'qo': 'QUESTION',   # open question : question ouverte sur une opinion
-    'qrr': 'QUESTION',  # or-clause : question alternative (A ou B ?)
-    'qy^d': 'QUESTION', # declarative yes-no : question sous forme déclarative
-    'qw^d': 'QUESTION', # declarative wh : question wh sous forme déclarative
-
+    "qy": "QUESTION",  # yes-no question : question fermée oui/non
+    "qw": "QUESTION",  # wh-question : question ouverte (who, what, where...)
+    "qh": "QUESTION",  # rhetorical question : question rhétorique
+    "qo": "QUESTION",  # open question : question ouverte sur une opinion
+    "qrr": "QUESTION",  # or-clause : question alternative (A ou B ?)
+    "qy^d": "QUESTION",  # declarative yes-no : question sous forme déclarative
+    "qw^d": "QUESTION",  # declarative wh : question wh sous forme déclarative
     # --- ORDRE : directives, ordres ---
-    'ad': 'ORDRE',      # action-directive : ordre, demande d'action
-
+    "ad": "ORDRE",  # action-directive : ordre, demande d'action
     # --- ACCORD : réponses positives ---
-    'aa': 'ACCORD',     # accept : accord, acceptation
-    'aap_am': 'ACCORD', # accept-part / maybe : accord partiel ou hésitant
-    'ny': 'ACCORD',     # yes-answer : réponse "oui"
-
+    "aa": "ACCORD",  # accept : accord, acceptation
+    "aap_am": "ACCORD",  # accept-part / maybe : accord partiel ou hésitant
+    "ny": "ACCORD",  # yes-answer : réponse "oui"
     # --- DESACCORD : réponses négatives ---
-    'no': 'DESACCORD',  # no-answer : réponse "non"
-    'nn': 'DESACCORD',  # no (neutre) : refus neutre
-    'ng': 'DESACCORD',  # disagree : désaccord explicite
-    'ar': 'DESACCORD',  # reject : rejet
-    'arp_nd': 'DESACCORD', # reject-part / no-defense : désaccord partiel
-
+    "no": "DESACCORD",  # no-answer : réponse "non"
+    "nn": "DESACCORD",  # no (neutre) : refus neutre
+    "ng": "DESACCORD",  # disagree : désaccord explicite
+    "ar": "DESACCORD",  # reject : rejet
+    "arp_nd": "DESACCORD",  # reject-part / no-defense : désaccord partiel
     # --- POLITESSE : régulation sociale (crucial pour les biais de genre !)
     # Ces actes traduisent souvent une asymétrie de pouvoir ou de la soumission
-    'fa': 'POLITESSE',  # apology : excuse ("I'm sorry", "excuse me")
-    'ft': 'POLITESSE',  # thanking : remerciement ("thank you", "thanks")
-    'fp': 'POLITESSE',  # conventional-opening : formule de politesse d'ouverture
-    'fc': 'POLITESSE',  # conventional-closing : formule de clôture ("bye", "take care")
-
+    "fa": "POLITESSE",  # apology : excuse ("I'm sorry", "excuse me")
+    "ft": "POLITESSE",  # thanking : remerciement ("thank you", "thanks")
+    "fp": "POLITESSE",  # conventional-opening : formule de politesse d'ouverture
+    "fc": "POLITESSE",  # conventional-closing : formule de clôture ("bye", "take care")
     # --- BACKCHANNEL : signaux d'écoute active ---
     # Indique que l'interlocuteur écoute sans prendre le tour de parole
-    'b': 'BACKCHANNEL',   # backchannel : "uh-huh", "right", "yeah"
-    'b^m': 'BACKCHANNEL', # backchannel partiel
-    'bh': 'BACKCHANNEL',  # backchannel sous forme de question ("really?")
-    'bk': 'BACKCHANNEL',  # acknowledge-answer : accusé de réception
-    'ba': 'BACKCHANNEL',  # assessment : évaluation/appréciation brève
-    'br': 'BACKCHANNEL',  # repeat : répétition pour signaler l'écoute
-
+    "b": "BACKCHANNEL",  # backchannel : "uh-huh", "right", "yeah"
+    "b^m": "BACKCHANNEL",  # backchannel partiel
+    "bh": "BACKCHANNEL",  # backchannel sous forme de question ("really?")
+    "bk": "BACKCHANNEL",  # acknowledge-answer : accusé de réception
+    "ba": "BACKCHANNEL",  # assessment : évaluation/appréciation brève
+    "br": "BACKCHANNEL",  # repeat : répétition pour signaler l'écoute
     # --- AUTRE_DIALOGUE : gestion du tour de parole ---
-    '^2': 'AUTRE_DIALOGUE',  # collaborative completion : fin de phrase de l'autre
-    '^g': 'AUTRE_DIALOGUE',  # tag-question : tag de fin ("right?", "isn't it?")
-    '^h': 'AUTRE_DIALOGUE',  # hold avant de prendre le tour
-    '^q': 'AUTRE_DIALOGUE',  # citation : reprise des mots de l'autre
-    'h': 'AUTRE_DIALOGUE',   # hedge : hésitation, atténuation
-
+    "^2": "AUTRE_DIALOGUE",  # collaborative completion : fin de phrase de l'autre
+    "^g": "AUTRE_DIALOGUE",  # tag-question : tag de fin ("right?", "isn't it?")
+    "^h": "AUTRE_DIALOGUE",  # hold avant de prendre le tour
+    "^q": "AUTRE_DIALOGUE",  # citation : reprise des mots de l'autre
+    "h": "AUTRE_DIALOGUE",  # hedge : hésitation, atténuation
     # --- PLAINTE : désapprobation, plainte ---
-    'bd': 'PLAINTE',     # downplayer : plainte, désapprobation
-
+    "bd": "PLAINTE",  # downplayer : plainte, désapprobation
     # --- BRUIT → None : sera filtré et supprimé du dataset ---
     # Ces répliques n'ont pas de signal linguistique exploitable
     # et n'existent pas dans le Cornell Movie-Dialogs Corpus cible
-    '%': None,                  # fragment abandonné (phrase coupée)
-    'x': None,                  # non-verbal (bruit, rire...)
-    't1': None,                 # self-talk : monologue
-    't3': None,                 # joke/anecdote : trop rare pour être appris
-    'na': None,                 # affirmation négative ambiguë
-    'fo_o_fw_"_by_bc': None,    # formules diverses (citations, "parce que"...)
-    'oo_co_cc': None,           # offre/option/accord conditionnel : trop rare
+    "%": None,  # fragment abandonné (phrase coupée)
+    "x": None,  # non-verbal (bruit, rire...)
+    "t1": None,  # self-talk : monologue
+    "t3": None,  # joke/anecdote : trop rare pour être appris
+    "na": None,  # affirmation négative ambiguë
+    'fo_o_fw_"_by_bc': None,  # formules diverses (citations, "parce que"...)
+    "oo_co_cc": None,  # offre/option/accord conditionnel : trop rare
 }
 
 
 # =============================================================================
 # FONCTION 1 : nettoyage d'une réplique avec spaCy
 # =============================================================================
+
 
 def nettoyer_texte(texte, nlp):
     """
@@ -123,9 +116,9 @@ def nettoyer_texte(texte, nlp):
     # Le corpus SWDA contient des annotations entre accolades {D ...} et
     # crochets [ ... ] qui représentent des disfluences (hésitations, reprises).
     # On les supprime car ils ne font pas partie du contenu linguistique réel.
-    texte = re.sub(r'\{[^}]*\}', '', texte)  # supprime tout ce qui est entre { }
-    texte = re.sub(r'\[', '', texte)          # supprime les crochets ouvrants
-    texte = re.sub(r'\]', '', texte)          # supprime les crochets fermants
+    texte = re.sub(r"\{[^}]*\}", "", texte)  # supprime tout ce qui est entre { }
+    texte = re.sub(r"\[", "", texte)  # supprime les crochets ouvrants
+    texte = re.sub(r"\]", "", texte)  # supprime les crochets fermants
 
     # --- Étape 2 : traitement spaCy (tokenisation + lemmatisation) ---
     # nlp(texte) découpe le texte en tokens et calcule le lemme de chacun
@@ -141,12 +134,13 @@ def nettoyer_texte(texte, nlp):
             lemmes_utiles.append(token.lemma_.lower())
 
     # On reconstitue une chaîne de caractères à partir des lemmes filtrés
-    return ' '.join(lemmes_utiles)
+    return " ".join(lemmes_utiles)
 
 
 # =============================================================================
 # FONCTION 2 : préparation complète du dataset SWDA
 # =============================================================================
+
 
 def preparer_dataset_swda(dataset):
     """
@@ -174,6 +168,31 @@ def preparer_dataset_swda(dataset):
     # On charge le modèle d'anglais de spaCy (petit modèle, suffisant pour
     # la lemmatisation et la détection des stop words)
     nlp = spacy.load("en_core_web_sm")
+    nlp_rapide = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+
+    # On retire les mots grammaticaux importants de la liste des stop words
+    mots_a_garder = {
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "would",
+        "will",
+        "should",
+        "please",
+        "who",
+        "what",
+        "where",
+        "when",
+        "why",
+        "how",
+        "get",
+        "now",
+    }
+
+    for mot in mots_a_garder:
+        nlp_rapide.vocab[mot].is_stop = False
 
     print("Conversion du dataset en DataFrame...")
     df = pd.DataFrame(dataset["train"])
@@ -183,9 +202,7 @@ def preparer_dataset_swda(dataset):
     # La feature ClassLabel contient la liste des noms correspondants.
     # On utilise int2str() pour convertir chaque entier en son nom textuel.
     feature_label = dataset["train"].features["damsl_act_tag"]
-    df["label_nom"] = df["damsl_act_tag"].apply(
-        lambda i: feature_label.int2str(i)
-    )
+    df["label_nom"] = df["damsl_act_tag"].apply(lambda i: feature_label.int2str(i))
 
     # --- Étape 2 : application du mapping → macro-classes ---
     # On remplace chaque nom de label par sa macro-classe.
@@ -197,31 +214,34 @@ def preparer_dataset_swda(dataset):
     nb_avant = len(df)
     df = df[df["macro_classe"].notna()].copy()
     nb_apres = len(df)
-    print(f"Lignes supprimées (BRUIT) : {nb_avant - nb_apres} "
-          f"({(nb_avant - nb_apres) / nb_avant * 100:.1f}%)")
+    print(
+        f"Lignes supprimées (BRUIT) : {nb_avant - nb_apres} "
+        f"({(nb_avant - nb_apres) / nb_avant * 100:.1f}%)"
+    )
 
     # --- Étape 4 : nettoyage du texte avec spaCy ---
     # On applique nettoyer_texte() sur chaque réplique.
     # disable=["parser", "ner"] accélère spaCy : on n'a besoin que du
     # tagger (pour la lemmatisation), pas de l'analyse syntaxique complète.
-    print("Nettoyage des textes avec spaCy (peut prendre quelques minutes)...")
+    print("Nettoyage des textes avec spaCy...")
     nlp_rapide = spacy.load("en_core_web_sm", disable=["parser", "ner"])
-    df["texte_nettoye"] = df["text"].apply(
-        lambda t: nettoyer_texte(str(t), nlp_rapide)
-    )
+    tqdm.pandas(desc="Nettoyage spaCy")
+    df["texte_nettoye"] = df["text"].progress_apply(lambda t: nettoyer_texte(str(t), nlp_rapide))
 
     # --- Étape 5 : suppression des répliques vides après nettoyage ---
     # Certaines répliques ne contiennent que des stop words ou de la ponctuation.
     # Après nettoyage, elles deviennent des chaînes vides — on les retire.
     df = df[df["texte_nettoye"].str.strip() != ""].copy()
 
-    print(f"\nDataset prêt : {len(df)} répliques | "
-          f"{df['macro_classe'].nunique()} macro-classes")
+    print(
+        f"\nDataset prêt : {len(df)} répliques | "
+        f"{df['macro_classe'].nunique()} macro-classes"
+    )
     print("\nDistribution des macro-classes :")
     print(df["macro_classe"].value_counts())
 
     # On ne retourne que les deux colonnes utiles pour l'entraînement
-    return df[["texte_nettoye", "macro_classe"]].reset_index(drop=True)
+    return df[["text", "texte_nettoye", "macro_classe"]].reset_index(drop=True)
 
 
 # =============================================================================
