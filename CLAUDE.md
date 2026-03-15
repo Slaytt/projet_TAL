@@ -50,3 +50,7 @@ The SWDA dataset can be loaded two ways:
 - Via NLTK: `nltk.download('swda')` then `from nltk.corpus import swda` — key field is `act_tag`
 
 The first download is slow (~several minutes). Subsequent runs use the local cache.
+
+# Instructions globales de l'assistant
+Chaque fois que tu génères un script complexe, une architecture de code, ou une réponse détaillée de plus de 15 lignes, tu dois utiliser l'outil MCP 'obsidian' (qui pointe vers /Users/slayt/Documents/Koda). 
+Tu devras créer un nouveau fichier Markdown avec un titre clair dans ce dossier, y mettre au propre ta réponse structurée, puis me faire un résumé rapide ici dans le terminal en me confirmant le nom du fichier créé.
