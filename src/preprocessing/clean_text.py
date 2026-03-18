@@ -5,28 +5,35 @@
 # Ce fichier contient deux fonctions principales :
 #   1. nettoyer_texte()      → nettoie une réplique brute avec spaCy
 #   2. preparer_dataset_swda() → applique le nettoyage sur tout le dataset SWDA
-#                                et regroupe les 43 labels en 11 macro-classes
+#                                et regroupe les 43 labels en 10 macro-classes
 
+import os
 import re
 
 import pandas as pd
 import spacy
 from tqdm import tqdm
 
+# Force le mode offline pour HuggingFace (utilise le cache local)
+# Évite que load_dataset() bloque en essayant de vérifier les mises à jour
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 # =============================================================================
-# DICTIONNAIRE DE MAPPING : 43 labels SWDA → 11 macro-classes
+# DICTIONNAIRE DE MAPPING : 43 labels SWDA → 10 macro-classes
 # =============================================================================
 # Chaque label SWDA (ex: 'sd', 'qy') est associé à une macro-classe.
 # Les labels avec None seront considérés comme du BRUIT et supprimés.
 # Ce regroupement est crucial pour notre analyse des biais de genre :
 #   - POLITESSE (fa=excuse, ft=remerciement) révèle des asymétries de pouvoir
 #   - ORDRE (ad=directive) est un marqueur de domination
-#   - PLAINTE (bd) peut être genrée
 
 LABEL_TO_MACROCLASSE = {
-    # --- STATEMENT : déclarations factuelles + continuations ---
+    # --- STATEMENT : déclarations factuelles ---
     "sd": "STATEMENT",  # statement-non-opinion : déclaration factuelle
-    "+": "STATEMENT",  # continuation : suite de la réplique précédente
+    # --- CONTINUATION : hérite du label précédent dans la conversation ---
+    # Le label '+' sera résolu dynamiquement dans preparer_dataset_swda()
+    # grâce à un forward-fill par conversation (pas de mapping fixe ici)
+    "+": "+",  # placeholder, résolu après
     # --- OPINION : affirmations subjectives ---
     "sv": "OPINION",  # statement-opinion : point de vue personnel
     "bf": "OPINION",  # belief : croyance, bilan personnel
@@ -44,12 +51,13 @@ LABEL_TO_MACROCLASSE = {
     "aa": "ACCORD",  # accept : accord, acceptation
     "aap_am": "ACCORD",  # accept-part / maybe : accord partiel ou hésitant
     "ny": "ACCORD",  # yes-answer : réponse "oui"
-    # --- DESACCORD : réponses négatives ---
+    # --- DESACCORD : réponses négatives + plaintes ---
     "no": "DESACCORD",  # no-answer : réponse "non"
     "nn": "DESACCORD",  # no (neutre) : refus neutre
     "ng": "DESACCORD",  # disagree : désaccord explicite
     "ar": "DESACCORD",  # reject : rejet
     "arp_nd": "DESACCORD",  # reject-part / no-defense : désaccord partiel
+    "bd": "DESACCORD",  # downplayer : plainte, désapprobation (fusionné ici)
     # --- POLITESSE : régulation sociale (crucial pour les biais de genre !)
     # Ces actes traduisent souvent une asymétrie de pouvoir ou de la soumission
     "fa": "POLITESSE",  # apology : excuse ("I'm sorry", "excuse me")
@@ -70,8 +78,6 @@ LABEL_TO_MACROCLASSE = {
     "^h": "AUTRE_DIALOGUE",  # hold avant de prendre le tour
     "^q": "AUTRE_DIALOGUE",  # citation : reprise des mots de l'autre
     "h": "AUTRE_DIALOGUE",  # hedge : hésitation, atténuation
-    # --- PLAINTE : désapprobation, plainte ---
-    "bd": "PLAINTE",  # downplayer : plainte, désapprobation
     # --- BRUIT → None : sera filtré et supprimé du dataset ---
     # Ces répliques n'ont pas de signal linguistique exploitable
     # et n'existent pas dans le Cornell Movie-Dialogs Corpus cible
@@ -82,6 +88,28 @@ LABEL_TO_MACROCLASSE = {
     "na": None,  # affirmation négative ambiguë
     'fo_o_fw_"_by_bc': None,  # formules diverses (citations, "parce que"...)
     "oo_co_cc": None,  # offre/option/accord conditionnel : trop rare
+}
+
+# =============================================================================
+# MOTS GRAMMATICAUX À CONSERVER (non filtrés comme stop words)
+# =============================================================================
+# Ces mots sont normalement supprimés par spaCy (stop words), mais ils
+# portent un signal important pour la classification des dialogue acts.
+MOTS_A_GARDER = {
+    "do", "does", "did",             # auxiliaires (questions, négations)
+    "can", "could", "would",         # modaux
+    "will", "should", "might",       # modaux
+    "please",                        # signal ORDRE / POLITESSE
+    "who", "what", "where",          # mots interrogatifs
+    "when", "why", "how",            # mots interrogatifs
+    "get", "make",                   # verbes d'action (ORDRE)
+    "now",                           # urgence (ORDRE)
+    "not", "no",                     # négation (DESACCORD)
+    # Verbes courants marqués stop words par spaCy mais utiles pour
+    # distinguer les macro-classes (surtout ORDRE et QUESTION)
+    "say", "go", "take", "give",     # verbes d'action fréquents
+    "put", "see", "keep", "call",    # verbes d'action fréquents
+    "show", "move",                  # verbes directifs (ORDRE)
 }
 
 
@@ -99,7 +127,7 @@ def nettoyer_texte(texte, nlp):
          (ces symboles annotent des hésitations dans le corpus, ex: "{D So, }")
       2. Tokenisation + lemmatisation par spaCy
       3. Filtrage : on garde uniquement les mots qui sont :
-         - alphabétiques (pas de chiffres ni de ponctuation)
+         - alphabétiques OU dont le lemme est dans MOTS_A_GARDER
          - non stop words (pas "the", "is", "I"...)
          - de longueur > 1 (évite les lettres isolées résiduelles)
 
@@ -109,7 +137,7 @@ def nettoyer_texte(texte, nlp):
 
     Retourne :
       str : les lemmes utiles séparés par des espaces
-            ex: "get car right time" pour "Get in the car right now, I don't have time"
+            ex: "get car right now not time" pour "Get in the car right now, I don't have time"
     """
 
     # --- Étape 1 : suppression des marqueurs de disfluence SWDA ---
@@ -119,6 +147,13 @@ def nettoyer_texte(texte, nlp):
     texte = re.sub(r"\{[^}]*\}", "", texte)  # supprime tout ce qui est entre { }
     texte = re.sub(r"\[", "", texte)  # supprime les crochets ouvrants
     texte = re.sub(r"\]", "", texte)  # supprime les crochets fermants
+    texte = re.sub(r"<<[^>]*>>", "", texte)  # supprime <<long pause>>, <<talking>>...
+    texte = re.sub(r"<[^>]*>", "", texte)  # supprime <beep>, <laughter>...
+
+    # --- Étape 1b : mise en minuscule AVANT spaCy ---
+    # Nécessaire pour que les mots_a_garder soient reconnus même en début
+    # de phrase (ex: "Do" → "do" sera bien identifié comme non-stop word)
+    texte = texte.lower()
 
     # --- Étape 2 : traitement spaCy (tokenisation + lemmatisation) ---
     # nlp(texte) découpe le texte en tokens et calcule le lemme de chacun
@@ -127,11 +162,15 @@ def nettoyer_texte(texte, nlp):
     # --- Étape 3 : filtrage des tokens ---
     lemmes_utiles = []
     for token in doc:
-        # token.is_alpha  : True si le token ne contient que des lettres
-        # token.is_stop   : True si c'est un mot vide ("the", "is", "I"...)
-        # token.lemma_    : la forme de base du mot ("running" → "run")
-        if token.is_alpha and not token.is_stop and len(token.lemma_) > 1:
-            lemmes_utiles.append(token.lemma_.lower())
+        lemme = token.lemma_.lower()
+        # On garde un token si :
+        #   - il est alphabétique OU son lemme est dans MOTS_A_GARDER
+        #     (permet de récupérer "n't" → lemme "not", qui n'est pas alphabétique
+        #      à cause de l'apostrophe mais dont le lemme est crucial)
+        #   - il n'est pas un stop word
+        #   - son lemme fait plus d'1 caractère
+        if (token.is_alpha or lemme in MOTS_A_GARDER) and not token.is_stop and len(lemme) > 1:
+            lemmes_utiles.append(lemme)
 
     # On reconstitue une chaîne de caractères à partir des lemmes filtrés
     return " ".join(lemmes_utiles)
@@ -151,6 +190,7 @@ def preparer_dataset_swda(dataset):
       1. Convertit le split 'train' en DataFrame Pandas
       2. Récupère le nom textuel du label (ex: 4 → 'sd') grâce au ClassLabel
       3. Applique le mapping LABEL_TO_MACROCLASSE pour obtenir les macro-classes
+      3b. Résout les continuations (+) en héritant du label précédent
       4. Supprime les lignes dont la macro-classe est None (BRUIT)
       5. Nettoie chaque réplique avec spaCy (lemmatisation + stop words)
       6. Supprime les répliques vides après nettoyage
@@ -160,6 +200,7 @@ def preparer_dataset_swda(dataset):
 
     Retourne :
       DataFrame Pandas avec les colonnes :
+        - 'text'           : la réplique brute originale
         - 'texte_nettoye'  : la réplique nettoyée par spaCy
         - 'macro_classe'   : la macro-classe (STATEMENT, QUESTION, etc.)
     """
@@ -167,32 +208,15 @@ def preparer_dataset_swda(dataset):
     print("Chargement du modèle spaCy...")
     # On charge le modèle d'anglais de spaCy (petit modèle, suffisant pour
     # la lemmatisation et la détection des stop words)
-    nlp = spacy.load("en_core_web_sm")
+    # disable=["parser", "ner"] accélère spaCy : on n'a besoin que du
+    # tagger (pour la lemmatisation), pas de l'analyse syntaxique complète.
     nlp_rapide = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
     # On retire les mots grammaticaux importants de la liste des stop words
-    mots_a_garder = {
-        "do",
-        "does",
-        "did",
-        "can",
-        "could",
-        "would",
-        "will",
-        "should",
-        "please",
-        "who",
-        "what",
-        "where",
-        "when",
-        "why",
-        "how",
-        "get",
-        "now",
-    }
-
-    for mot in mots_a_garder:
+    # + "n't" qui est le token spaCy pour les contractions (don't → "do" + "n't")
+    for mot in MOTS_A_GARDER:
         nlp_rapide.vocab[mot].is_stop = False
+    nlp_rapide.vocab["n't"].is_stop = False  # contraction → lemme "not"
 
     print("Conversion du dataset en DataFrame...")
     df = pd.DataFrame(dataset["train"])
@@ -209,6 +233,24 @@ def preparer_dataset_swda(dataset):
     # Les labels non présents dans le dictionnaire reçoivent None par défaut.
     df["macro_classe"] = df["label_nom"].map(LABEL_TO_MACROCLASSE)
 
+    # --- Étape 2b : résolution des continuations (+) ---
+    # Le label '+' signifie "continuation de la réplique précédente".
+    # On hérite la macro-classe de la réplique précédente dans la même conversation.
+    # Ex: si la réplique d'avant est QUESTION, la continuation devient QUESTION.
+    df = df.sort_values(
+        ["conversation_no", "utterance_index", "subutterance_index"]
+    ).reset_index(drop=True)
+    # On remplace le placeholder '+' par NaN, puis on propage la dernière
+    # macro-classe connue vers l'avant (forward-fill) PAR LOCUTEUR.
+    # Crucial : si on faisait ffill par conversation seulement, un '+' de
+    # speaker A hériterait du backchannel de speaker B au lieu de son propre
+    # label précédent. En groupant par (conversation_no, caller), chaque
+    # locuteur hérite de son propre historique.
+    df["macro_classe"] = df["macro_classe"].replace("+", pd.NA)
+    df["macro_classe"] = df.groupby(["conversation_no", "caller"])["macro_classe"].ffill()
+    # Si un '+' est la toute première réplique d'un locuteur dans une conversation
+    # (rare), il n'a pas de label à hériter → il restera NaN et sera supprimé
+
     # --- Étape 3 : suppression du BRUIT ---
     # On supprime toutes les lignes dont la macro-classe est None (BRUIT).
     nb_avant = len(df)
@@ -220,13 +262,11 @@ def preparer_dataset_swda(dataset):
     )
 
     # --- Étape 4 : nettoyage du texte avec spaCy ---
-    # On applique nettoyer_texte() sur chaque réplique.
-    # disable=["parser", "ner"] accélère spaCy : on n'a besoin que du
-    # tagger (pour la lemmatisation), pas de l'analyse syntaxique complète.
     print("Nettoyage des textes avec spaCy...")
-    nlp_rapide = spacy.load("en_core_web_sm", disable=["parser", "ner"])
     tqdm.pandas(desc="Nettoyage spaCy")
-    df["texte_nettoye"] = df["text"].progress_apply(lambda t: nettoyer_texte(str(t), nlp_rapide))
+    df["texte_nettoye"] = df["text"].progress_apply(
+        lambda t: nettoyer_texte(str(t), nlp_rapide)
+    )
 
     # --- Étape 5 : suppression des répliques vides après nettoyage ---
     # Certaines répliques ne contiennent que des stop words ou de la ponctuation.
@@ -240,7 +280,7 @@ def preparer_dataset_swda(dataset):
     print("\nDistribution des macro-classes :")
     print(df["macro_classe"].value_counts())
 
-    # On ne retourne que les deux colonnes utiles pour l'entraînement
+    # On ne retourne que les colonnes utiles pour l'entraînement
     return df[["text", "texte_nettoye", "macro_classe"]].reset_index(drop=True)
 
 
@@ -251,9 +291,14 @@ def preparer_dataset_swda(dataset):
 if __name__ == "__main__":
     from datasets import load_dataset
 
-    print("=== TEST DU PRÉTRAITEMENT ===\n")
+    print("=== TEST DU PRÉTRAITEMENT (30 premiers exemples) ===\n")
+    print("Chargement du dataset SWDA...")
     dataset = load_dataset("swda", trust_remote_code=True)
-    df_propre = preparer_dataset_swda(dataset)
 
-    print("\n--- Aperçu des 10 premières lignes ---")
-    print(df_propre.head(10))
+    # On réduit le dataset à 30 lignes pour tester rapidement
+    dataset_reduit = {"train": dataset["train"].select(range(30))}
+
+    df_propre = preparer_dataset_swda(dataset_reduit)
+
+    print("\n--- Résultat ---")
+    print(df_propre.to_string())
