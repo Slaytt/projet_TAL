@@ -77,9 +77,14 @@ def predire_intention(texte_brut, pipeline, nlp):
         return "VIDE"
 
     # Étape 2 : prédiction
-    # pipeline.predict() attend une liste — on encapsule le texte dans [...]
-    # [0] pour récupérer le premier (et unique) résultat
-    prediction = pipeline.predict([texte_nettoye])[0]
+    # Le pipeline utilise un ColumnTransformer — il attend un DataFrame
+    # avec les mêmes colonnes que lors de l'entraînement
+    contient_point = 1 if "?" in str(texte_brut) else 0
+    df_input = pd.DataFrame({
+        "texte_nettoye": [texte_nettoye],
+        "contient_point_interrogation": [contient_point]
+    })
+    prediction = pipeline.predict(df_input)[0]
 
     return prediction
 
