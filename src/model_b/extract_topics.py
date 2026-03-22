@@ -106,7 +106,16 @@ def entrainer_lda(textes_nettoyes, n_themes=N_THEMES):
     STOP_WORDS_CUSTOM = [
         # Interjections conversationnelles
         "uh", "huh", "ah", "yeah", "oh", "hey", "gonna", "wanna", "gotta",
-        "um", "hmm", "yep", "nah", "ok", "okay", "alright", "wow", "ooh"
+        "um", "hmm", "yep", "nah", "ok", "okay", "alright", "wow", "ooh",
+        # Verbes ultra-génériques (aucune valeur thématique)
+        "get", "got", "go", "come", "know", "want", "say", "tell", "think",
+        "make", "take", "let", "look", "need", "mean", "use", "try", "ask",
+        "seem", "give", "keep", "happen",
+        # Adjectifs/adverbes génériques sans valeur thématique
+        "thing", "way", "right", "good", "sure", "well", "fine", "great",
+        "lot", "kind", "maybe", "probably", "actually", "really", "still",
+        # Prénoms courants qui polluent les thèmes
+        "john", "jack", "george", "bob", "tom", "joe", "chris",
     ]
     print("\nVectorisation (CountVectorizer)...")
     vectoriseur = CountVectorizer(
