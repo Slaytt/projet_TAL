@@ -101,11 +101,20 @@ def entrainer_lda(textes_nettoyes, n_themes=N_THEMES):
     # max_df=0.95 : ignore les mots présents dans +95% des documents (trop communs)
     # min_df=10   : ignore les mots présents dans moins de 10 documents (trop rares)
     # max_features=5000 : limite le vocabulaire aux 5000 mots les plus fréquents
+    # token_pattern : filtre les mots de moins de 3 lettres (élimine "to", "uh"...)
+    # stop_words_custom : interjections conversationnelles non filtrées par spaCy
+    STOP_WORDS_CUSTOM = [
+        # Interjections conversationnelles
+        "uh", "huh", "ah", "yeah", "oh", "hey", "gonna", "wanna", "gotta",
+        "um", "hmm", "yep", "nah", "ok", "okay", "alright", "wow", "ooh"
+    ]
     print("\nVectorisation (CountVectorizer)...")
     vectoriseur = CountVectorizer(
         max_df=0.95,
         min_df=10,
-        max_features=5000
+        max_features=5000,
+        token_pattern=r"[a-z]{3,}",
+        stop_words=STOP_WORDS_CUSTOM
     )
     matrice_comptes = vectoriseur.fit_transform(textes_nettoyes)
     print(f"Matrice de comptes : {matrice_comptes.shape[0]} documents × "
